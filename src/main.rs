@@ -5,6 +5,9 @@ use crate::util::{
     event::{Event, Events},
     StatefulList,
 };
+use genawaiter::sync::{Gen, GenBoxed};
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use std::{error::Error, io};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::widgets::List;
@@ -16,8 +19,6 @@ use tui::{
     widgets::{BarChart, Block, Borders},
     Terminal,
 };
-use rand::thread_rng;
-use rand::seq::SliceRandom;
 
 struct App<'a> {
     data: Vec<(&'a str, u64)>,
@@ -27,48 +28,54 @@ struct App<'a> {
 
 impl<'a> App<'a> {
     fn new() -> App<'a> {
-      let mut app = App {
+        let mut app = App {
             data: (0..100).map(|x| ("", x)).collect::<Vec<_>>(),
             items: StatefulList::with_items(vec![("Bubble Sort", 1), ("Insertion Sort", 2)]),
             sorting: false,
         };
-      app.shuffle_data();
-      app
+        app.shuffle_data();
+        app
     }
 
-    fn shuffle_data(&mut self){
-      self.data.shuffle(&mut thread_rng());
+    fn shuffle_data(&mut self) {
+        self.data.shuffle(&mut thread_rng());
     }
 
     fn update(&mut self) {
         match self.items.state.selected() {
-          Some(_) => {
-            if self.sorting {
-              match self.items.items[self.items.state.selected().unwrap()].0 {
-                "Bubble Sort" => {self.BubbleSort(self.data.len())},
-                "Insertion Sort" => {}
-                _ => {}
+            Some(_) => {
+                if self.sorting {
+                    match self.items.items[self.items.state.selected().unwrap()].0 {
+                        "Bubble Sort" =>  SortingGenerator::bubble_sort(
+                            &mut self.data.iter().map(|x| x.1).collect(),
+                            self.data.len() ,
+                        ),
+                    };
+                }
+            }
+            None => {}
+        };
+    }
+}
+
+struct SortingGenerator;
+
+impl SortingGenerator {
+    fn bubble_sort(data: &mut Vec<u64>, n: usize) -> GenBoxed<usize> {
+        Gen::new_boxed(|mut co| {
+          let mut d = data.clone();
+          async move {
+            if n == 0 {
+              return;
+            }
+            for i in 0..n-1{
+              if d[i] > d[i+1] {
+                d.swap(i+1,i);
               }
             }
-          },
-          None => {}
-        }
+          }
+        })
     }
-
-    fn BubbleSort(&mut self, n:usize){
-      if n == 1 {
-        self.sorting = false;
-        return;
-      } 
-      for i in 0..n-1 {
-        if self.data[i].1 > self.data[i+1].1{
-          self.data.swap(i+1,i);
-        }
-      }
-      std::thread::sleep(std::time::Duration::from_millis(10));
-     self.BubbleSort(n-1);
-    }
-
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -131,8 +138,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Key::Up => {
                     app.items.previous();
                 }
-                Key::Char(' ') => {app.sorting = ! app.sorting}
-                Key::Char('r') => {app.shuffle_data()}
+                Key::Char(' ') => app.sorting = !app.sorting,
+                Key::Char('r') => app.shuffle_data(),
                 _ => {}
             },
             Event::Tick => {
