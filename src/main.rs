@@ -1,13 +1,15 @@
-#[allow(dead_code)]
 mod util;
 
 use crate::util::{
     event::{Event, Events},
     StatefulList,
 };
-use genawaiter::sync::{Gen, GenBoxed};
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+
+use futures_core::Stream;
+use futures_util::pin_mut;
+use futures_util::StreamExt;
+use sorting_generator;
+use std::pin::Pin;
 use std::{error::Error, io};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::widgets::List;
@@ -22,63 +24,43 @@ use tui::{
 
 struct App<'a> {
     data: Vec<(&'a str, u64)>,
-    items: StatefulList<(&'a str, usize)>,
-    sorting: bool,
+    items: StatefulList<(&'a str, usize, Pin<Box<dyn Stream<Item = Vec<(&'a str,u64)>>>>)>,
+    pause: bool,
 }
 
 impl<'a> App<'a> {
-    fn new() -> App<'a> {
-        let mut app = App {
-            data: (0..100).map(|x| ("", x)).collect::<Vec<_>>(),
-            items: StatefulList::with_items(vec![("Bubble Sort", 1), ("Insertion Sort", 2)]),
-            sorting: false,
-        };
-        app.shuffle_data();
-        app
+    fn new() -> App<'static> {
+        App {
+            data: Vec::new(),
+            items: StatefulList::with_items(vec![
+                ("Bubble Sort", 0, Box::pin(sorting_generator::bubble_sort())),
+                ("Insertion Sort", 1, Box::pin(sorting_generator::insertion_sort()),),
+                ("Selection Sort", 2, Box::pin(sorting_generator::selection_sort()),),
+            ]),
+            pause: true,
+        }
     }
 
-    fn shuffle_data(&mut self) {
-        self.data.shuffle(&mut thread_rng());
-    }
-
-    fn update(&mut self) {
+    async fn update(&mut self) {
         match self.items.state.selected() {
             Some(_) => {
-                if self.sorting {
-                    match self.items.items[self.items.state.selected().unwrap()].0 {
-                        "Bubble Sort" =>  SortingGenerator::bubble_sort(
-                            &mut self.data.iter().map(|x| x.1).collect(),
-                            self.data.len() ,
-                        ),
-                    };
+                if !self.pause {
+                    let s = &mut self.items.items[self.items.state.selected().unwrap()].2;
+                    pin_mut!(s);
+                    if let Some(value) = s.next().await {
+                        self.data = value; //.iter().map(|x| ("", *x)).collect();
+                    }
                 }
             }
-            None => {}
-        };
+            None => {
+                self.items.state.select(Some(0));
+            }
+        }
     }
 }
 
-struct SortingGenerator;
-
-impl SortingGenerator {
-    fn bubble_sort(data: &mut Vec<u64>, n: usize) -> GenBoxed<usize> {
-        Gen::new_boxed(|mut co| {
-          let mut d = data.clone();
-          async move {
-            if n == 0 {
-              return;
-            }
-            for i in 0..n-1{
-              if d[i] > d[i+1] {
-                d.swap(i+1,i);
-              }
-            }
-          }
-        })
-    }
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = MouseTerminal::from(stdout);
     let stdout = AlternateScreen::from(stdout);
@@ -94,7 +76,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .margin(2)
-                .constraints([Constraint::Percentage(30), Constraint::Percentage(30)].as_ref())
+                .constraints([Constraint::Percentage(20), Constraint::Percentage(20)].as_ref())
                 .split(f.size());
 
             let list = List::new(
@@ -113,7 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let barchart = BarChart::default()
                 .block(Block::default().borders(Borders::ALL))
                 .data(&app.data)
-                .bar_width(chunks[1].width / 100)
+                .bar_width(chunks[1].width / 55)
                 .bar_gap(1)
                 .bar_style(Style::default().fg(Color::Green))
                 .value_style(
@@ -129,21 +111,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Key::Char('q') => {
                     break;
                 }
-                Key::Left => {
-                    app.items.unselect();
-                }
                 Key::Down => {
                     app.items.next();
+                    app.pause = true;
                 }
                 Key::Up => {
                     app.items.previous();
+                    app.pause = true;
                 }
-                Key::Char(' ') => app.sorting = !app.sorting,
-                Key::Char('r') => app.shuffle_data(),
+                Key::Char(' ') => {
+                    app.pause = !app.pause;
+                }
                 _ => {}
             },
             Event::Tick => {
-                app.update();
+                app.update().await;
             }
         }
     }

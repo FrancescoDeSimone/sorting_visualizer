@@ -6,8 +6,13 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+
 [dependencies]
 tui = "0.16"
 termion = "1.5"
 rand = "*"
-genawaiter = "0.99.1"
+tokio = { version = "*", features = ["full"] }
+async-stream = "0.3.5"
+futures-core = "*"
+futures-util = "*"
+sorting_generator = { path = "sorting_generator" }
