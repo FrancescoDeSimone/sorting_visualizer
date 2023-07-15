@@ -1,66 +1,24 @@
+mod array_state_event;
+mod sorting_algorithms;
+mod ui;
 mod util;
 
-use crate::util::{
-    event::{Event, Events},
-    StatefulList,
-};
+use crate::util::event::{Event, Events};
 
-use futures_core::Stream;
-use futures_util::pin_mut;
-use futures_util::StreamExt;
-use sorting_generator;
-use std::pin::Pin;
+use crate::ui::App;
+
+use sorting_algorithms::SortingAlgorithm;
 use std::{error::Error, io};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
-use tui::widgets::List;
-use tui::widgets::ListItem;
+use tui::style::{Color, Modifier, Style};
+use tui::widgets::{BarChart, Block, Borders, List, ListItem};
 use tui::{
     backend::TermionBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    widgets::{BarChart, Block, Borders},
     Terminal,
 };
 
-struct App<'a> {
-    data: Vec<(&'a str, u64)>,
-    items: StatefulList<(&'a str, usize, Pin<Box<dyn Stream<Item = Vec<(&'a str,u64)>>>>)>,
-    pause: bool,
-}
-
-impl<'a> App<'a> {
-    fn new() -> App<'static> {
-        App {
-            data: Vec::new(),
-            items: StatefulList::with_items(vec![
-                ("Bubble Sort", 0, Box::pin(sorting_generator::bubble_sort())),
-                ("Insertion Sort", 1, Box::pin(sorting_generator::insertion_sort()),),
-                ("Selection Sort", 2, Box::pin(sorting_generator::selection_sort()),),
-            ]),
-            pause: true,
-        }
-    }
-
-    async fn update(&mut self) {
-        match self.items.state.selected() {
-            Some(_) => {
-                if !self.pause {
-                    let s = &mut self.items.items[self.items.state.selected().unwrap()].2;
-                    pin_mut!(s);
-                    if let Some(value) = s.next().await {
-                        self.data = value; //.iter().map(|x| ("", *x)).collect();
-                    }
-                }
-            }
-            None => {
-                self.items.state.select(Some(0));
-            }
-        }
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = MouseTerminal::from(stdout);
     let stdout = AlternateScreen::from(stdout);
@@ -69,8 +27,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let events = Events::new();
 
-    let mut app = App::new();
-
+    let mut app = App::new(vec![
+        SortingAlgorithm::BubbleSort,
+        SortingAlgorithm::InsertionSort,
+        SortingAlgorithm::SelectionSort,
+    ]);
+    app.sorting_algoritms.state.select(Some(0));
     loop {
         terminal.draw(|f| {
             let chunks = Layout::default()
@@ -80,22 +42,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .split(f.size());
 
             let list = List::new(
-                app.items
+                app.sorting_algoritms
                     .items
                     .iter()
-                    .map(|x| ListItem::new(x.0))
+                    .map(|x| ListItem::new(x.get_name()))
                     .collect::<Vec<_>>(),
             )
             .block(Block::default().title("List").borders(Borders::ALL))
             .style(Style::default().fg(Color::White))
             .highlight_style(Style::default().add_modifier(Modifier::BOLD))
             .highlight_symbol(">>");
-            f.render_stateful_widget(list, chunks[0], &mut app.items.state);
+            f.render_stateful_widget(list, chunks[0], &mut app.sorting_algoritms.state);
 
+            let data = app.get_data();
             let barchart = BarChart::default()
                 .block(Block::default().borders(Borders::ALL))
-                .data(&app.data)
-                .bar_width(chunks[1].width / 55)
+                .data(&data)
+                .bar_width(chunks[1].width / 100)
                 .bar_gap(1)
                 .bar_style(Style::default().fg(Color::Green))
                 .value_style(
@@ -112,20 +75,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     break;
                 }
                 Key::Down => {
-                    app.items.next();
-                    app.pause = true;
+                    app.sorting_algoritms.next();
+                    app.reset();
                 }
+                Key::Left => app.go_back(),
+                Key::Right => app.go_forward(),
                 Key::Up => {
-                    app.items.previous();
-                    app.pause = true;
+                    app.sorting_algoritms.previous();
+                    app.reset();
                 }
-                Key::Char(' ') => {
-                    app.pause = !app.pause;
-                }
+                Key::Char(' ') => app.run_sort(),
+                Key::Char('r') => app.reset(),
                 _ => {}
             },
             Event::Tick => {
-                app.update().await;
+                app.update();
             }
         }
     }
